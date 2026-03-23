@@ -134,16 +134,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return
       }
 
-      // Check if Supabase is properly configured
-      if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-        toast({
-          title: t("login.failed"),
-          description: "Database connection not configured. Please check your environment variables.",
-          variant: "destructive",
-        })
-        return
-      }
-
       // Get user from database
       const dbUser = await getUserByEmail(email)
 

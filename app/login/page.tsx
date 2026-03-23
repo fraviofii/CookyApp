@@ -59,15 +59,10 @@ export default function LoginPage() {
     </div>
   ) : null
 
-  // Add a debug section to the login page to help troubleshoot connection issues
-
-  // Add this after the dbMessage variable
   const debugInfo =
     process.env.NODE_ENV === "development" ? (
       <div className="mb-4 p-3 bg-blue-50 text-blue-800 rounded-md text-sm">
         <p className="font-medium">Debug Information</p>
-        <p>Supabase URL: {process.env.NEXT_PUBLIC_SUPABASE_URL ? "Set" : "Not set"}</p>
-        <p>Supabase Key: {process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? "Set" : "Not set"}</p>
         <p>Database Initialized: {dbInitialized === null ? "Checking..." : dbInitialized ? "Yes" : "No"}</p>
       </div>
     ) : null

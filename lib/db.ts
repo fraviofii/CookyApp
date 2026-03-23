@@ -1,37 +1,19 @@
-import { supabase } from "./supabase"
+"use server"
+
+import { pool } from "./postgres"
 import { v4 as uuidv4 } from "uuid"
 
-// Update the checkTablesExist function with better error handling
-
-export async function checkTablesExist() {
+export async function checkTablesExist(): Promise<boolean> {
   try {
-    // Check if Supabase URL and key are properly set
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-      console.error("Supabase URL or key is not set in environment variables")
+    await pool.query("SELECT 1 FROM users LIMIT 1")
+    return true
+  } catch (error: any) {
+    if (error.code === "42P01") {
+      // undefined_table — tables not yet created
       return false
     }
-
-    // Try to query the users table
-    const { data, error } = await supabase.from("users").select("count").limit(1)
-
-    // If there's an error about the relation not existing, tables don't exist
-    if (error && error.message.includes('relation "public.users" does not exist')) {
-      return false
-    }
-
-    // If we're in development mode and there's any other error, log it but return true
-    // to allow development without a real database
-    if (error && process.env.NODE_ENV === "development") {
-      console.warn("Error checking if tables exist, but continuing in development mode:", error)
-      return true
-    }
-
-    return !error
-  } catch (error) {
-    console.error("Error checking if tables exist:", error)
-    // In development mode, return true to allow development without a database
     if (process.env.NODE_ENV === "development") {
-      console.warn("Allowing development mode without database")
+      console.warn("Error checking tables, continuing in dev mode:", error.message)
       return true
     }
     return false
@@ -43,7 +25,7 @@ export type User = {
   id: string
   name: string
   email: string
-  password: string // In a real app, this would be hashed
+  password: string
   role: "manager" | "employee" | "sales"
 }
 
@@ -80,430 +62,333 @@ export type Client = {
   phone: string
 }
 
-// User functions
-export const getUsers = async (): Promise<User[]> => {
-  const { data, error } = await supabase.from("users").select("*")
+// ─── User functions ────────────────────────────────────────────────────────────
 
-  if (error) {
+export const getUsers = async (): Promise<User[]> => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM users ORDER BY created_at ASC")
+    return rows.map((r: any) => ({ id: r.id, name: r.name, email: r.email, password: r.password, role: r.role }))
+  } catch (error) {
     console.error("Error fetching users:", error)
     return []
   }
-
-  return data.map((user) => ({
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    password: user.password,
-    role: user.role,
-  }))
 }
 
 export const getUserById = async (id: string): Promise<User | null> => {
-  const { data, error } = await supabase.from("users").select("*").eq("id", id).single()
-
-  if (error) {
+  try {
+    const { rows } = await pool.query("SELECT * FROM users WHERE id = $1", [id])
+    if (rows.length === 0) return null
+    const r = rows[0]
+    return { id: r.id, name: r.name, email: r.email, password: r.password, role: r.role }
+  } catch (error) {
     console.error("Error fetching user:", error)
     return null
   }
-
-  return {
-    id: data.id,
-    name: data.name,
-    email: data.email,
-    password: data.password,
-    role: data.role,
-  }
 }
 
-// Update the getUserByEmail function with better error handling
-
-// Update the getUserByEmail function to handle non-existent tables
-export async function getUserByEmail(email: string) {
+export async function getUserByEmail(email: string): Promise<User | null> {
   try {
-    // First check if tables exist
     const tablesExist = await checkTablesExist()
-    if (!tablesExist) {
-      console.log("Tables do not exist yet")
-      return null
-    }
+    if (!tablesExist) return null
 
-    // Check if Supabase URL and key are properly set
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-      console.error("Supabase URL or key is not set in environment variables")
-      return null
-    }
-
-    const { data, error } = await supabase.from("users").select("*").eq("email", email).single()
-
-    if (error) {
-      console.error("Error fetching user by email:", error.message)
-      return null
-    }
-
-    return data
+    const { rows } = await pool.query("SELECT * FROM users WHERE email = $1 LIMIT 1", [email])
+    if (rows.length === 0) return null
+    const r = rows[0]
+    return { id: r.id, name: r.name, email: r.email, password: r.password, role: r.role }
   } catch (error) {
     console.error("Error fetching user by email:", error)
-    // Return a mock user for development purposes if in development mode
-    if (process.env.NODE_ENV === "development") {
-      console.log("Returning mock user for development")
-      return {
-        id: "00000000-0000-0000-0000-000000000001",
-        name: "Manager User",
-        email: "manager@cookyapp.com",
-        password: "password",
-        role: "manager",
-      }
-    }
     return null
   }
 }
 
 export const createUser = async (user: Omit<User, "id">): Promise<User | null> => {
-  const newUser = {
-    id: uuidv4(),
-    ...user,
-  }
-
-  const { data, error } = await supabase.from("users").insert([newUser]).select()
-
-  if (error) {
+  try {
+    const id = uuidv4()
+    const { rows } = await pool.query(
+      "INSERT INTO users (id, name, email, password, role) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+      [id, user.name, user.email, user.password, user.role],
+    )
+    const r = rows[0]
+    return { id: r.id, name: r.name, email: r.email, password: r.password, role: r.role }
+  } catch (error) {
     console.error("Error creating user:", error)
     return null
-  }
-
-  return {
-    id: data[0].id,
-    name: data[0].name,
-    email: data[0].email,
-    password: data[0].password,
-    role: data[0].role,
   }
 }
 
 export const updateUser = async (id: string, user: Partial<User>): Promise<User | null> => {
-  const { data, error } = await supabase.from("users").update(user).eq("id", id).select()
+  try {
+    const fields = (Object.keys(user) as (keyof User)[]).filter((k) => k !== "id")
+    if (fields.length === 0) return getUserById(id)
 
-  if (error) {
+    const setClauses = fields.map((f, i) => `${f} = $${i + 1}`)
+    const values = [...fields.map((f) => user[f]), id]
+
+    const { rows } = await pool.query(
+      `UPDATE users SET ${setClauses.join(", ")} WHERE id = $${fields.length + 1} RETURNING *`,
+      values,
+    )
+    if (rows.length === 0) return null
+    const r = rows[0]
+    return { id: r.id, name: r.name, email: r.email, password: r.password, role: r.role }
+  } catch (error) {
     console.error("Error updating user:", error)
     return null
-  }
-
-  if (data.length === 0) {
-    return null
-  }
-
-  return {
-    id: data[0].id,
-    name: data[0].name,
-    email: data[0].email,
-    password: data[0].password,
-    role: data[0].role,
   }
 }
 
 export const deleteUser = async (id: string): Promise<boolean> => {
-  const { error } = await supabase.from("users").delete().eq("id", id)
-
-  if (error) {
+  try {
+    await pool.query("DELETE FROM users WHERE id = $1", [id])
+    return true
+  } catch (error) {
     console.error("Error deleting user:", error)
     return false
   }
-
-  return true
 }
 
-// Product functions
-export const getProducts = async (): Promise<Product[]> => {
-  const { data, error } = await supabase.from("products").select("*")
+// ─── Product functions ─────────────────────────────────────────────────────────
 
-  if (error) {
+export const getProducts = async (): Promise<Product[]> => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM products ORDER BY created_at ASC")
+    return rows.map((r: any) => ({ id: r.id, name: r.name, description: r.description, price: parseFloat(r.price) }))
+  } catch (error) {
     console.error("Error fetching products:", error)
     return []
   }
-
-  return data.map((product) => ({
-    id: product.id,
-    name: product.name,
-    description: product.description,
-    price: product.price,
-  }))
 }
 
 export const getProductById = async (id: string): Promise<Product | null> => {
-  const { data, error } = await supabase.from("products").select("*").eq("id", id).single()
-
-  if (error) {
+  try {
+    const { rows } = await pool.query("SELECT * FROM products WHERE id = $1", [id])
+    if (rows.length === 0) return null
+    const r = rows[0]
+    return { id: r.id, name: r.name, description: r.description, price: parseFloat(r.price) }
+  } catch (error) {
     console.error("Error fetching product:", error)
     return null
-  }
-
-  return {
-    id: data.id,
-    name: data.name,
-    description: data.description,
-    price: data.price,
   }
 }
 
 export const createProduct = async (product: Omit<Product, "id">): Promise<Product | null> => {
-  const newProduct = {
-    id: uuidv4(),
-    ...product,
-  }
-
-  const { data, error } = await supabase.from("products").insert([newProduct]).select()
-
-  if (error) {
+  try {
+    const id = uuidv4()
+    const { rows } = await pool.query(
+      "INSERT INTO products (id, name, description, price) VALUES ($1, $2, $3, $4) RETURNING *",
+      [id, product.name, product.description, product.price],
+    )
+    const r = rows[0]
+    return { id: r.id, name: r.name, description: r.description, price: parseFloat(r.price) }
+  } catch (error) {
     console.error("Error creating product:", error)
     return null
-  }
-
-  return {
-    id: data[0].id,
-    name: data[0].name,
-    description: data[0].description,
-    price: data[0].price,
   }
 }
 
 export const updateProduct = async (id: string, product: Partial<Product>): Promise<Product | null> => {
-  const { data, error } = await supabase.from("products").update(product).eq("id", id).select()
+  try {
+    const fields = (Object.keys(product) as (keyof Product)[]).filter((k) => k !== "id")
+    if (fields.length === 0) return getProductById(id)
 
-  if (error) {
+    const setClauses = fields.map((f, i) => `${f} = $${i + 1}`)
+    const values = [...fields.map((f) => product[f]), id]
+
+    const { rows } = await pool.query(
+      `UPDATE products SET ${setClauses.join(", ")} WHERE id = $${fields.length + 1} RETURNING *`,
+      values,
+    )
+    if (rows.length === 0) return null
+    const r = rows[0]
+    return { id: r.id, name: r.name, description: r.description, price: parseFloat(r.price) }
+  } catch (error) {
     console.error("Error updating product:", error)
     return null
-  }
-
-  if (data.length === 0) {
-    return null
-  }
-
-  return {
-    id: data[0].id,
-    name: data[0].name,
-    description: data[0].description,
-    price: data[0].price,
   }
 }
 
 export const deleteProduct = async (id: string): Promise<boolean> => {
-  const { error } = await supabase.from("products").delete().eq("id", id)
-
-  if (error) {
+  try {
+    await pool.query("DELETE FROM products WHERE id = $1", [id])
+    return true
+  } catch (error) {
     console.error("Error deleting product:", error)
     return false
   }
-
-  return true
 }
 
-// Client functions
-export const getClients = async (): Promise<Client[]> => {
-  const { data, error } = await supabase.from("clients").select("*")
+// ─── Client functions ──────────────────────────────────────────────────────────
 
-  if (error) {
+export const getClients = async (): Promise<Client[]> => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM clients ORDER BY created_at ASC")
+    return rows.map((r: any) => ({ id: r.id, name: r.name, email: r.email, phone: r.phone }))
+  } catch (error) {
     console.error("Error fetching clients:", error)
     return []
   }
-
-  return data.map((client) => ({
-    id: client.id,
-    name: client.name,
-    email: client.email,
-    phone: client.phone,
-  }))
 }
 
 export const getClientById = async (id: string): Promise<Client | null> => {
-  const { data, error } = await supabase.from("clients").select("*").eq("id", id).single()
-
-  if (error) {
+  try {
+    const { rows } = await pool.query("SELECT * FROM clients WHERE id = $1", [id])
+    if (rows.length === 0) return null
+    const r = rows[0]
+    return { id: r.id, name: r.name, email: r.email, phone: r.phone }
+  } catch (error) {
     console.error("Error fetching client:", error)
     return null
-  }
-
-  return {
-    id: data.id,
-    name: data.name,
-    email: data.email,
-    phone: data.phone,
   }
 }
 
 export const createClient = async (client: Omit<Client, "id">): Promise<Client | null> => {
-  const newClient = {
-    id: uuidv4(),
-    ...client,
-  }
-
-  const { data, error } = await supabase.from("clients").insert([newClient]).select()
-
-  if (error) {
+  try {
+    const id = uuidv4()
+    const { rows } = await pool.query(
+      "INSERT INTO clients (id, name, email, phone) VALUES ($1, $2, $3, $4) RETURNING *",
+      [id, client.name, client.email, client.phone],
+    )
+    const r = rows[0]
+    return { id: r.id, name: r.name, email: r.email, phone: r.phone }
+  } catch (error) {
     console.error("Error creating client:", error)
     return null
-  }
-
-  return {
-    id: data[0].id,
-    name: data[0].name,
-    email: data[0].email,
-    phone: data[0].phone,
   }
 }
 
 export const updateClient = async (id: string, client: Partial<Client>): Promise<Client | null> => {
-  const { data, error } = await supabase.from("clients").update(client).eq("id", id).select()
+  try {
+    const fields = (Object.keys(client) as (keyof Client)[]).filter((k) => k !== "id")
+    if (fields.length === 0) return getClientById(id)
 
-  if (error) {
+    const setClauses = fields.map((f, i) => `${f} = $${i + 1}`)
+    const values = [...fields.map((f) => client[f]), id]
+
+    const { rows } = await pool.query(
+      `UPDATE clients SET ${setClauses.join(", ")} WHERE id = $${fields.length + 1} RETURNING *`,
+      values,
+    )
+    if (rows.length === 0) return null
+    const r = rows[0]
+    return { id: r.id, name: r.name, email: r.email, phone: r.phone }
+  } catch (error) {
     console.error("Error updating client:", error)
     return null
-  }
-
-  if (data.length === 0) {
-    return null
-  }
-
-  return {
-    id: data[0].id,
-    name: data[0].name,
-    email: data[0].email,
-    phone: data[0].phone,
   }
 }
 
 export const deleteClient = async (id: string): Promise<boolean> => {
+  const client = await pool.connect()
   try {
-    // First, find all orders associated with this client
-    const { data: clientOrders, error: ordersError } = await supabase.from("orders").select("id").eq("client_id", id)
+    await client.query("BEGIN")
 
-    if (ordersError) {
-      console.error("Error finding client orders:", ordersError)
-      return false
-    }
+    // Delete order_items for all orders of this client
+    await client.query(
+      "DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders WHERE client_id = $1)",
+      [id],
+    )
+    // Delete orders for this client
+    await client.query("DELETE FROM orders WHERE client_id = $1", [id])
+    // Delete the client
+    await client.query("DELETE FROM clients WHERE id = $1", [id])
 
-    // For each order, delete its order items first
-    if (clientOrders && clientOrders.length > 0) {
-      for (const order of clientOrders) {
-        // Delete order items for this order
-        const { error: itemsError } = await supabase.from("order_items").delete().eq("order_id", order.id)
-
-        if (itemsError) {
-          console.error(`Error deleting order items for order ${order.id}:`, itemsError)
-          return false
-        }
-      }
-
-      // Now delete all orders for this client
-      const { error: deleteOrdersError } = await supabase.from("orders").delete().eq("client_id", id)
-
-      if (deleteOrdersError) {
-        console.error("Error deleting client orders:", deleteOrdersError)
-        return false
-      }
-    }
-
-    // Finally, delete the client
-    const { error } = await supabase.from("clients").delete().eq("id", id)
-
-    if (error) {
-      console.error("Error deleting client:", error)
-      return false
-    }
-
+    await client.query("COMMIT")
     return true
   } catch (error) {
-    console.error("Error in deleteClient:", error)
+    await client.query("ROLLBACK")
+    console.error("Error deleting client:", error)
     return false
+  } finally {
+    client.release()
   }
 }
 
-// Order functions
+// ─── Order functions ───────────────────────────────────────────────────────────
+
 export const getOrders = async (): Promise<Order[]> => {
-  // This is more complex as we need to join with clients and order_items
-  const { data: ordersData, error: ordersError } = await supabase.from("orders").select("*, clients(name, phone)")
+  try {
+    const { rows: ordersRows } = await pool.query(`
+      SELECT o.id, o.total, o.status, o.created_at, c.name AS client_name, c.phone AS client_phone
+      FROM orders o
+      JOIN clients c ON c.id = o.client_id
+      ORDER BY o.created_at DESC
+    `)
 
-  if (ordersError) {
-    console.error("Error fetching orders:", ordersError)
-    return []
-  }
+    const orders: Order[] = []
 
-  const orders: Order[] = []
+    for (const order of ordersRows) {
+      const { rows: itemRows } = await pool.query(
+        `SELECT oi.id, oi.product_id, oi.quantity, oi.price, oi.observation, p.name AS product_name
+         FROM order_items oi
+         JOIN products p ON p.id = oi.product_id
+         WHERE oi.order_id = $1`,
+        [order.id],
+      )
 
-  for (const order of ordersData) {
-    // Get order items
-    const { data: itemsData, error: itemsError } = await supabase
-      .from("order_items")
-      .select("*, products(name)")
-      .eq("order_id", order.id)
-
-    if (itemsError) {
-      console.error("Error fetching order items:", itemsError)
-      continue
+      orders.push({
+        id: order.id,
+        clientName: order.client_name,
+        clientPhone: order.client_phone,
+        total: parseFloat(order.total),
+        status: order.status,
+        createdAt: order.created_at,
+        items: itemRows.map((i: any) => ({
+          id: i.id,
+          productId: i.product_id,
+          productName: i.product_name,
+          price: parseFloat(i.price),
+          quantity: i.quantity,
+          observation: i.observation ?? "",
+        })),
+      })
     }
 
-    const items: OrderItem[] = itemsData.map((item) => ({
-      id: item.id,
-      productId: item.product_id,
-      productName: item.products.name,
-      price: item.price,
-      quantity: item.quantity,
-      observation: item.observation,
-    }))
-
-    orders.push({
-      id: order.id,
-      clientName: order.clients.name,
-      clientPhone: order.clients.phone,
-      items,
-      total: order.total,
-      status: order.status,
-      createdAt: order.created_at,
-    })
+    return orders
+  } catch (error) {
+    console.error("Error fetching orders:", error)
+    return []
   }
-
-  return orders
 }
 
 export const getOrderById = async (id: string): Promise<Order | null> => {
-  const { data: order, error: orderError } = await supabase
-    .from("orders")
-    .select("*, clients(name, phone)")
-    .eq("id", id)
-    .single()
+  try {
+    const { rows: orderRows } = await pool.query(
+      `SELECT o.id, o.total, o.status, o.created_at, c.name AS client_name, c.phone AS client_phone
+       FROM orders o
+       JOIN clients c ON c.id = o.client_id
+       WHERE o.id = $1`,
+      [id],
+    )
+    if (orderRows.length === 0) return null
+    const order = orderRows[0]
 
-  if (orderError) {
-    console.error("Error fetching order:", orderError)
+    const { rows: itemRows } = await pool.query(
+      `SELECT oi.id, oi.product_id, oi.quantity, oi.price, oi.observation, p.name AS product_name
+       FROM order_items oi
+       JOIN products p ON p.id = oi.product_id
+       WHERE oi.order_id = $1`,
+      [id],
+    )
+
+    return {
+      id: order.id,
+      clientName: order.client_name,
+      clientPhone: order.client_phone,
+      total: parseFloat(order.total),
+      status: order.status,
+      createdAt: order.created_at,
+      items: itemRows.map((i: any) => ({
+        id: i.id,
+        productId: i.product_id,
+        productName: i.product_name,
+        price: parseFloat(i.price),
+        quantity: i.quantity,
+        observation: i.observation ?? "",
+      })),
+    }
+  } catch (error) {
+    console.error("Error fetching order:", error)
     return null
-  }
-
-  // Get order items
-  const { data: itemsData, error: itemsError } = await supabase
-    .from("order_items")
-    .select("*, products(name)")
-    .eq("order_id", order.id)
-
-  if (itemsError) {
-    console.error("Error fetching order items:", itemsError)
-    return null
-  }
-
-  const items: OrderItem[] = itemsData.map((item) => ({
-    id: item.id,
-    productId: item.product_id,
-    productName: item.products.name,
-    price: item.price,
-    quantity: item.quantity,
-    observation: item.observation,
-  }))
-
-  return {
-    id: order.id,
-    clientName: order.clients.name,
-    clientPhone: order.clients.phone,
-    items,
-    total: order.total,
-    status: order.status,
-    createdAt: order.created_at,
   }
 }
 
@@ -512,129 +397,64 @@ export const createOrder = async (
   items: Array<{ productId: string; quantity: number; price: number; observation: string }>,
   total: number,
 ): Promise<Order | null> => {
+  const client = await pool.connect()
   try {
-    // Check if tables exist first
     const tablesExist = await checkTablesExist()
     if (!tablesExist) {
       console.error("Database tables do not exist")
       return null
     }
 
-    // Start a transaction
+    await client.query("BEGIN")
+
     const orderId = uuidv4()
+    await client.query(
+      "INSERT INTO orders (id, client_id, total, status) VALUES ($1, $2, $3, $4)",
+      [orderId, clientId, total, "pending"],
+    )
 
-    // 1. Create the order
-    const { error: orderError } = await supabase.from("orders").insert([
-      {
-        id: orderId,
-        client_id: clientId,
-        total,
-        status: "pending",
-      },
-    ])
-
-    if (orderError) {
-      console.error("Error creating order:", orderError)
-      return null
-    }
-
-    // 2. Create order items
-    const orderItems = items.map((item) => ({
-      id: uuidv4(),
-      order_id: orderId,
-      product_id: item.productId,
-      quantity: item.quantity,
-      price: item.price,
-      observation: item.observation,
-    }))
-
-    const { error: itemsError } = await supabase.from("order_items").insert(orderItems)
-
-    if (itemsError) {
-      console.error("Error creating order items:", itemsError)
-      // In a real app, you would roll back the transaction here
-      return null
-    }
-
-    // Get the client info
-    const { data: client, error: clientError } = await supabase
-      .from("clients")
-      .select("name, phone")
-      .eq("id", clientId)
-      .single()
-
-    if (clientError) {
-      console.error("Error fetching client:", clientError)
-      return null
-    }
-
-    // Get the product names for the items
-    const productItems: OrderItem[] = []
     for (const item of items) {
-      const { data: product, error: productError } = await supabase
-        .from("products")
-        .select("name")
-        .eq("id", item.productId)
-        .single()
-
-      if (productError) {
-        console.error("Error fetching product:", productError)
-        continue
-      }
-
-      productItems.push({
-        id: uuidv4(),
-        productId: item.productId,
-        productName: product.name,
-        price: item.price,
-        quantity: item.quantity,
-        observation: item.observation,
-      })
+      await client.query(
+        "INSERT INTO order_items (id, order_id, product_id, quantity, price, observation) VALUES ($1, $2, $3, $4, $5, $6)",
+        [uuidv4(), orderId, item.productId, item.quantity, item.price, item.observation],
+      )
     }
 
-    // Return the created order
-    return {
-      id: orderId,
-      clientName: client.name,
-      clientPhone: client.phone,
-      items: productItems,
-      total,
-      status: "pending",
-      createdAt: new Date().toISOString(),
-    }
+    await client.query("COMMIT")
+
+    return getOrderById(orderId)
   } catch (error) {
-    console.error("Error in createOrder:", error)
+    await client.query("ROLLBACK")
+    console.error("Error creating order:", error)
     return null
+  } finally {
+    client.release()
   }
 }
 
 export const updateOrderStatus = async (id: string, status: Order["status"]): Promise<boolean> => {
-  const { error } = await supabase.from("orders").update({ status }).eq("id", id)
-
-  if (error) {
+  try {
+    await pool.query("UPDATE orders SET status = $1 WHERE id = $2", [status, id])
+    return true
+  } catch (error) {
     console.error("Error updating order status:", error)
     return false
   }
-
-  return true
 }
 
 export const deleteOrder = async (id: string): Promise<boolean> => {
-  // First delete order items
-  const { error: itemsError } = await supabase.from("order_items").delete().eq("order_id", id)
-
-  if (itemsError) {
-    console.error("Error deleting order items:", itemsError)
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
+    await client.query("DELETE FROM order_items WHERE order_id = $1", [id])
+    await client.query("DELETE FROM orders WHERE id = $1", [id])
+    await client.query("COMMIT")
+    return true
+  } catch (error) {
+    await client.query("ROLLBACK")
+    console.error("Error deleting order:", error)
     return false
+  } finally {
+    client.release()
   }
-
-  // Then delete the order
-  const { error: orderError } = await supabase.from("orders").delete().eq("id", id)
-
-  if (orderError) {
-    console.error("Error deleting order:", orderError)
-    return false
-  }
-
-  return true
 }
